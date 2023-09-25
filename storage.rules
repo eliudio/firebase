@@ -1,0 +1,191 @@
+// The general storage rule to remember is that the following:
+// 
+// 1. downloadURL
+//
+// From https://betterprogramming.pub/firebase-storage-gotchas-63a7cfef7677
+// downloadURL: Public but Private: For each and every single asset uploaded 
+// in the Storage, Firebase creates, regardless if you use it or not, 
+// a downloadUrl which is public, regardless of your rules, and accessible 
+// on the internet.
+// 
+// We use this downloadURL from the app. The URL is stored in the documents
+// Basically because of this, we never really "challange" the below rules, i.e. 
+// the downloadURL bypasses these rules. This is the correct behaviour: the URL 
+// is not shared (and has a secret token), so the URL would need to be shared 
+// with other people to gain access to the files. One could share the URL, one
+// could also just share the file. So: the concept downloadURL is acceptible.
+// However, the app can't really be used to test these rules.
+//
+// 2. custom claims
+// 
+// We use custom claims for restricting priv_req files.
+// However, the console.firebase.google.com interface doesn't allow
+// to test this as the custom claims can't be suplied or are retrieved
+// so hence we can't test these rules through the web interface
+//
+// Testing these rules, based on 1 and 2, we can only test the priv_req
+// rules through the app, without using the URL. For example by
+// 1) specifying privrequired level 1 for the about box image.
+// 2) using var widgetImage = FbStorageImageDoesntWork(ref: image.ref!, app: app, ); 
+//    in booklet_component.dart
+// 3) select privilegeLevel for access for that app, for that user
+//
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSuperUser() {
+      return false;
+  //    return request.auth != null && request.auth.token.email == "minkey.io.info@gmail.com";
+    }
+    
+    /* Function to tell if a string contains another string
+     * value: the string to be verified
+     * find: the string to be found
+     */
+    function contains(value, find) {
+  		  return value.matches(".*" + find + ";" + ".*");
+//      return value.replace(find, "?") != find;
+    }
+    
+    /* TODO: Use token to identify member as blocked: see accessSyncUpdate in index.js
+     */ 
+    function ownerNotBlocked() {
+    	return true;
+    }
+
+    // public access, files stored in directory public are... public
+    match /{appId}/public/{allPaths=**} {
+      allow read: if (true);
+      allow write: if (
+                     // superuser (owner of the app) can upload files without readAccess set
+                     isSuperUser()
+                                        
+                     ||
+                     
+                     // or any other user, but owner and privilegeRequired must be set
+                     (
+                       (request.auth != null)
+                       &&
+                       ('owner' in request.resource.metadata)
+                       &&
+                       (request.resource.metadata.owner == request.auth.uid)
+                       &&
+                       (ownerNotBlocked())
+                     )
+                   )
+    }
+
+    // *************************************** eliud_core *******************************************
+
+    // priv_req access
+    // 
+    // files stored in directory priv_req are restricted with privilegeRequired
+    // To allow to validate this, first we have setup custom user claims token to copy the member's access privilege.
+    // More about privilege is described in firestore.rules. Relevant for storage rules is that 
+    // this token - basically the member's privilege level - is used to compare against the meta data "privilegeRequired"
+    // Also see functions accessSyncUpdate, accessSyncDelete and accessSyncCreate specified in index.js
+    match /{appId}/priv_req/{allPaths=**} {
+      allow read: if (
+      
+                    isSuperUser()
+                     
+                    ||
+                     
+                    ('privilegeRequired' in resource.metadata)
+
+                    &&
+                    
+                    (request.auth != null)
+                    
+                    &&
+                    (
+                      (resource.metadata.privilegeRequired == '0')
+                      ||
+                      (resource.metadata.privilegeRequired == '1') && ((appId in request.auth.token.level1) || (appId in request.auth.token.level2) || (appId in request.auth.token.level3))
+                      ||
+                      (resource.metadata.privilegeRequired == '2') && ((appId in request.auth.token.level2) || (appId in request.auth.token.level3))
+                      ||
+                      (resource.metadata.privilegeRequired == '3') && (appId in request.auth.token.level3)
+                    )
+                  
+                  );
+      allow write: if (
+                     // superuser (owner of the app) can upload files without readAccess set
+                     isSuperUser()
+
+                     ||
+
+                     ('privilegeRequired' in request.resource.metadata)
+                     
+                     &&
+
+                     (request.auth != null)
+
+                     &&
+
+                     (
+                       (request.resource.metadata.privilegeRequired == '0')
+                       ||
+                       (request.resource.metadata.privilegeRequired == '1') && ((appId in request.auth.token.level1) || (appId in request.auth.token.level2) || (appId in request.auth.token.level3))                       
+                       ||
+                       (request.resource.metadata.privilegeRequired == '2') && ((appId in request.auth.token.level2) || (appId in request.auth.token.level3))
+                       ||
+                       (request.resource.metadata.privilegeRequired == '3') && (appId in request.auth.token.level3)
+                     )
+                  )
+    }
+
+    // 
+    // files stored in read_access are controlled with metadata "readAccess" which contains the list
+    // of specific users who can see these files/images. This list can also contain the word "PUBLIC" which makes the file accessible for everyone.
+    match /{appId}/read_access/{allPaths=**} {
+      allow read: if (
+      
+                    isSuperUser()
+                     
+                    ||
+                     
+                    ('readAccess' in resource.metadata)
+
+                    &&
+
+                    (
+                    
+                      (contains(resource.metadata.readAccess, 'PUBLIC'))
+                        
+                      ||
+                    
+                      // or readAccess contains the logged in user ID
+                      (
+                        (request.auth != null)
+                        &&
+                        (contains(resource.metadata.readAccess, request.auth.uid))
+                      )
+                    )
+                  );
+      allow write: if (
+                     // superuser (owner of the app) can upload files without readAccess set
+                     isSuperUser()
+                   
+                     ||
+                     
+                     // or any other user, but owner and readAccess must be set
+                     (
+                       (request.auth != null)
+                       &&
+// I'm removing the readAccess restriction when updating because a) it's not needed b) it interferes with my testing of moving from readAccess determined by the client to google functions
+//                       ('readAccess' in request.resource.metadata)
+//                       &&
+                       ('owner' in request.resource.metadata)
+                       &&
+                       (request.resource.metadata.owner == request.auth.uid)
+                       &&
+// I'm removing the readAccess restriction when updating because a) it's not needed b) it interferes with my testing of moving from readAccess determined by the client to google functions
+//                       (contains(request.resource.metadata.readAccess, request.auth.uid))
+//                       &&
+                       (ownerNotBlocked())
+                     )
+                   )
+    }
+  }
+}

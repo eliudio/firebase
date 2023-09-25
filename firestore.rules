@@ -1,0 +1,1205 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // eliud_core - Superuser should be allowed to do anything. Superuser is you, provided you have access to these rules.
+    function isSuperUser() {
+      // copy paste your google firebase email here:
+      return false;
+    }
+    
+    // I. We have the following types of restrictions of data access:
+    //
+    // ***  1. PrivilegeLevelRequired ***
+    // 
+    // Data of this category is data that is provided by the owner of the app and to allow to specifiy which page / dialog / component / image/
+    // is accessible to which member. Members can be part of level 1, level 2, level 3 (owner). Level 0 == public == NoPrivilegeRequired
+    // 
+    // 1.1. When a person logs into an app, e.g. juuwle, it will 
+    //
+    // a. update /member/subscriptions as well as create a copy in /member/subscriptionsAsString. 
+    //    The latter is required to be able to query for members having subscribed to an app. 
+    //    Subscription is nothing but 'having been there before'.
+    //
+    // b. create an entry /app/[app-id]/access/[member-id]. This entry will have a property privilegeLevel = 0, which also means subscription. 
+    //    A member can request to become level 1 or level 2 member, which is an increase of that privilegeLevel. The owner of the app can increase this value.
+    //
+    // 1.2. Privilege Level Required 
+    //
+    //    A page, dialog, component, can have conditions.privilegeLevelRequired value set. 
+    //    The member's privilegeLevel (1b) needs to be equal or higher than conditions.privilegeLevelRequired to be allowed to read this page, ... 
+    //    The firestore rules prevent the page to be viewed.
+    //
+    //    PrivilegeLevelRequired can be:
+    //
+    //    - NoPrivilegeRequired (0): pages accessible for the public, as well as subscribed members
+    //    - Level1PrivilegeRequired: pages accessible for level 1 members
+    //    - Level2PrivilegeRequired: pages accessible for level 2 members
+    //    - OwnerPrivilegeRequired: pages accessible for owners (level 3)
+    //
+    //    A page with NoPrivilegeRequired  can be accessed by the public (non logged in members), therefore also blocked members can see this page.
+    //
+    //    Membership only app: An app does not need to have all of its pages public. If you want your app to only be accessible for joined members, then we advise for your 
+    //    app to have at least 1 page with privilegeLevelRequired = 0. That page can be a page with a brief description of the app, or even an explain that it's not 
+    //    accessible to the public, perhaps with an invitation to request to join. 
+    //    
+    //    Public apps: If you have an app with only public pages, then all of the pages have privilegeLevelRequired = 0 and you don't offer the ability to join.
+    //    
+    //    Mixed apps: If you have an app that allows some public pages and the ability for members to join to see other areas of the app, then you can have pages
+    //    with varying values of privilegeLevelRequired.
+
+    // 1.2. How it's validated
+    //
+    // 1.2.1 Function: function updateToken in functions.js
+    //
+    // In function updateToken which is called when the access document is updated, we determine a custom token for the user
+    // This custom token that is attached to the member contains the fields level1, level2 and level 3, which are arrays representing
+    // the list of apps to which this user has access for which level.
+    // 
+    // 1.2.2 Database: function privilegedReadAccess in this file
+    //
+    // In function privilegedReadAccess: see comments below and find references to this function to know which documents use this access
+    // TODO: Consider, we could perhaps simplify the implementation of privilegedReadAccess by use the custom token, like the storage rule.
+    // 
+    // 1.2.3 Storage: 
+    // 
+    // Files stored in storage are represented by document "platformmedium".
+    // Files stored in directory /appId/priv_req/userId/file_name
+    // 
+    // Files we store in directory 'priv_req' have a metadata which includes the privilege required
+    // When a member wants access to these files, he has to have his access privilege level correspond or higher than the required privilege
+    // as specified in his custom token, updated in 1.2.1
+    // 
+    // **************************************************************************************************************************************************
+    //
+    // ***  2. PublicAccess ***
+    // 
+    // Some data is publicly accessible. For example the user policies. Files are represented by document "publicmedium"
+    // Files stored in directory /{appId}/public/userId/file_name
+    // 
+    // **************************************************************************************************************************************************
+    // 
+    // *** 3. ReadAccess ***
+    // 
+    // Some docs hold a "readAccess" attribute, i.e. memberMedium, chat, chatMemberInfo, memberProfile, post
+    // 
+    // These documents also have 
+    //   - "accessibleByGroup" which can be public, followers, justMe, specificMembers.
+    //   - "accessibleByMembers" which is the list of members when accessibleByGroupd is specificMembers
+    //
+    // Data stored in storage in directory read_access contains metaData readAccess which is also this array.
+    //
+    // 3.1 Function  
+    // 
+    // A function that determines readAccess, based on the accessibleBy fields.
+    // 
+    // - When updating memberMedium, chat, chatMemberInfo, memberProfile, post: finds followers and updates readAccess where accessibleByGroup is followers
+    //   - also update the read_access field of the referenced file if this is an update of memberMedium
+    // - When adding a follower: 
+    //   - add that member to readAccess for all memberMedium, chat, chatMemberInfo, memberProfile, post of that person where accessibleByGroup is followers
+    //   - for all membermedium, also update read_access field of the referenced file
+    // - When deleting a follower: 
+    //   - remove member from readAccess from all photos and posts of that person, ...
+    //   - for all membermedium, also update read_access field of the referenced file
+    // 
+    // 3.2 Database rules: functions: 
+    // allowUpdatePost, allowReadPost, allowDeletePost, postLikeUpdateCreate, allowLikeOrCommentPost, readAccessToChat, writeAccessToChat
+    // So the rules remain, the client side gets changed. No more determining of readaccess. Only when querying we query where public or readaccess contains me.
+    // 
+    // 3.3 Storage rules: 
+    // 
+    // Checks the member is part of the metadata readAccess
+    // These rules also remain
+    //
+    // **************************************************************************************************************************************************
+    //
+    // II. Display restrictions
+    //
+    //  When the privilege is sufficient to view a page, dialog or component, than a further display condition can be applied.
+    //  These conditions are display conditions, to improve user experience and are not enforced through the firestore rules. 
+    //  That means: in theory, everything restricted by display restrictions is convenience only and IS ACCESSIBLE for someone
+    //  who wants to
+    //
+    // a. conditions.packageCondition. This can be used as label to query the packages for the condition. 
+    //
+    //    Package condition is for example 'must have items in basket' and used to show the basket icon/action referring to the cart page. 
+    //    That page is conditional to having items in the basket. 
+    //    It is a freestyle string that only specific packages regocnise. 
+    //    In this example the package shop recognises the 'must have items in basket' condition and checks for items in the cart and indicates if the page 'cart' is accessible.
+    // 
+    // b. Blocked members
+    //
+    //    A member can be blocked with /app/[app-id]/access/[member-id]/blocked. 
+    //
+    //    That means that his privilegeLevel drops to 0 and he can only see what the public can see. Furthermore the app will not display publically visible 
+    //    data, just to highlight to that member that he is blocked. This behavior can be overridden...
+    //    
+    // c. conditions.conditionOverride. This can be used to further change the visibility of certain. Again these are display condition, not data protection!
+    //    
+    //    This conditionOverride enum can have values:
+    //     
+    //     - ExactPrivilege: in normal circumstances, a member sees all pages with less or equal required privileges than the one this member has. However,
+    //       if a page is indicated to be visible only for ExactPrivilege, then those pages with less required privileges are not visible. An example to 
+    //       illustrate how this works is when we want to create a welcome page for each different privilege.
+    //
+    //     - InclusiveForBlockedMembers: Present this data to a blocked member. This can be used for example to allow blocked members to see his notifications 
+    //       and assignments, allowing to be informed about the fact that he's blocked and take action to fix it.
+    //
+    //     - ExclusiveForBlockedMember: Present this data only for a blocked members.
+    // 
+    
+   function privilegedReadAccess() {
+      return 
+             isSuperUser() 
+      
+             ||
+
+             (resource.data.conditions.privilegeLevelRequired == 0) 
+
+             || 
+
+//           WE SHOULD USING THE TOKEN AS ALTERNATIVE BUT THAT DOESN'T WORK. REQUIRES FIXING
+             // Or support for querying for privilegeLevelRequired.
+             // We use this construct to allow specifying the rule, and allow to specify 
+             // the query that matches these rules.
+             // Here privilegeLevelRequired == privilegeLevel, which is to allow for 
+             // - query privilegeLevelRequired == 1, i.e. when privilegeLevel = 1
+             // - query privilegeLevelRequired == 2, i.e. when privilegeLevel = 2
+             // - query privilegeLevelRequired == 3, i.e. when privilegeLevel = 3
+             (request.auth != null)
+             && (resource.data.conditions.privilegeLevelRequired == (get(/databases/$(database)/documents/app/$(resource.data.appId)/access/$(request.auth.uid)).data.privilegeLevel))
+
+             ||
+
+             // Here privilegeLevelRequired == privilegeLevel -1, which is to allow for 
+             // - query privilegeLevelRequired == 1, i.e. when privilegeLevel = 2
+             // - query privilegeLevelRequired == 2, i.e. when privilegeLevel = 3
+             (request.auth != null)
+             && (resource.data.conditions.privilegeLevelRequired == (get(/databases/$(database)/documents/app/$(resource.data.appId)/access/$(request.auth.uid)).data.privilegeLevel -1))
+
+             ||
+
+             // Here privilegeLevelRequired == privilegeLevel -2, which is to allow for 
+             // - query privilegeLevelRequired == 1, i.e. when privilegeLevel = 3
+             (request.auth != null)
+             && (resource.data.conditions.privilegeLevelRequired == (get(/databases/$(database)/documents/app/$(resource.data.appId)/access/$(request.auth.uid)).data.privilegeLevel -2));
+
+//           WHY DOES THE BELOW NOW WORK? USING THE TOKEN AS ALTERNATIVE
+//           
+//             (resource.data.conditions.privilegeLevelRequired == 1)
+//             &&
+//             (
+//               (
+//                 (resource.data.appId in request.auth.token.level1) &&
+//                 ("level1" in request.auth.token) 
+//               )
+//               ||
+//               (
+//                 (resource.data.appId in request.auth.token.level2) &&
+//                 ("level2" in request.auth.token) 
+//               )
+//               ||
+//               (
+//                 (resource.data.appId in request.auth.token.level3) &&
+//                 ("level3" in request.auth.token) 
+//               )
+//             )
+//             
+//             ||
+//             
+//             (resource.data.conditions.privilegeLevelRequired == 2)
+//             &&
+//             (
+//               (
+//                 (resource.data.appId in request.auth.token.level2) &&
+//                 ("level2" in request.auth.token) 
+//               )
+//               ||
+//               (
+//                 (resource.data.appId in request.auth.token.level3) &&
+//                 ("level3" in request.auth.token) 
+//               )
+//             )
+//             
+//             ||
+//             
+//             (resource.data.conditions.privilegeLevelRequired == 3)
+//             &&
+//             (
+//               (resource.data.appId in request.auth.token.level3) &&
+//               ("level3" in request.auth.token) 
+//             )
+             
+ 		}
+
+    // rules for accessing app (config) data
+    function readAppData() {
+      return true;
+    }
+    
+    // ensure not blocked
+    function ensureNotBlockedWhilstUpdate() {
+      return
+        // no entry in acces yet
+        (get(/databases/$(database)/documents/app/$(request.resource.data.appId)/access/$(request.auth.uid)) == null)
+        ||
+        // or blocked != true
+        (get(/databases/$(database)/documents/app/$(request.resource.data.appId)/access/$(request.auth.uid)).data.blocked != true);
+    }
+      
+    function updateAppData() {
+             return isSuperUser() 
+      
+             || 
+
+             (request.auth != null) && 
+
+             // Allow the owner of the app to update documents
+             (get(/databases/$(database)/documents/app/$(resource.data.appId)).data.ownerID == request.auth.uid);
+    }
+    
+    function deleteAppData() {
+      return  isSuperUser() 
+
+              || 
+              
+              (request.auth != null) && 
+
+              // Allow the owner of the app to delete documents
+              (get(/databases/$(database)/documents/app/$(resource.data.appId)).data.ownerID == request.auth.uid);
+    }
+    
+    function createAppData() {
+      return isSuperUser() 
+      
+             || 
+             
+             (request.auth != null) && 
+
+             // Allow the owner of the app to create documents
+             (get(/databases/$(database)/documents/app/$(request.resource.data.appId)).data.ownerID == request.auth.uid);    
+    }
+
+    function canReadNotificationsAndAssignmentsAndStuff() {
+      return (isSuperUser() || ((request.auth != null) && ((resource.data.assigneeId == request.auth.uid)) || (resource.data.reporterId == request.auth.uid)));
+    }
+
+    // TODO: review. Should not allow a blocked member to update assignment
+    function canUpdateNotificationsAndAssignmentsAndStuff() {
+      return (isSuperUser() || ((request.auth != null) && ((resource.data.assigneeId == request.auth.uid)) || (resource.data.reporterId == request.auth.uid)));
+    }
+
+    // Blocked member can delete assignment, given they have the right to be forgotten
+    function canDeleteNotificationsAndAssignmentsAndStuff() {
+      return (isSuperUser() || ((request.auth != null) && ((resource.data.assigneeId == request.auth.uid)) || (resource.data.reporterId == request.auth.uid)));
+    }
+
+    // TODO: review. Should not allow a blocked member to create assignment
+    function canCreateNotificationsAndAssignmentsAndStuff() {
+      return (isSuperUser() || ((request.auth != null) && (request.resource.data.reporterId == request.auth.uid)));
+    }
+  
+    // eliud_pkg_shop - Country... to do
+    match /country/{id} {
+      allow read: if true
+      allow write:  if isSuperUser()
+    }
+
+    match /app/{id} {
+    
+      // *************************************** eliud_core *******************************************
+      match /access/{memberId} {
+        allow read: if true
+        allow update: if isSuperUser() || ((request.auth != null) && (get(/databases/$(database)/documents/app/$(id)).data.ownerID == request.auth.uid));
+        allow delete: if isSuperUser() || ((request.auth != null) && (get(/databases/$(database)/documents/app/$(id)).data.ownerID == request.auth.uid));
+        allow create: 
+                      // allow super user to create
+                      if isSuperUser() 
+
+                      // or allow owner to create
+
+                      || ((request.auth != null) && (get(/databases/$(database)/documents/app/$(id)).data.ownerID == request.auth.uid))
+
+                      // or allow member itself to create, with privilegeLevel of 0. 
+                      // This is for new users. 
+                      
+                      || ((request.auth != null) && (memberId == request.auth.uid) && (request.resource.data.privilegeLevel == 0));
+
+                      // 
+                      // By the way, allowing an update is NOT allowed, becasue 
+                      // - higher than 0 privilegeLevel is a privilege a user should not be able to assign to himself
+                      // - lower (-2) privilegeLevel means the member is blocked and can not change it to unblocked
+      }
+      
+      match /backendrequest/{id} {
+        allow read: if true;
+        allow create: if 
+                      (
+                        // logged in
+                        (request.auth != null)
+                        // and author 
+                        && (request.resource.data.authorId == request.auth.uid)
+                        // and not blocked
+                        && ensureNotBlockedWhilstUpdate()
+                      );
+        allow delete: if false;
+        allow update: if false;
+      }
+
+      match /appbar/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /policy/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /apppolicy/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /policypresentation/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /background/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /shadow/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /page/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /dialog/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /dialog/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /drawer/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /font/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /gridview/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /homemenu/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /menudef/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /possize/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /image/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /memberdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      // **** eliud_pkg_fundamentals ****
+      match /booklet/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /divider/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /dynamicwidget/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /document/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /fader/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /grid/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /playstore/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /presentation/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /simpleimage/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /simpletext/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /decoratedcontent/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /tutorial/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /photoandtext/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /platformmedium/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      // for membermedium: same rules as for post
+      match /membermedium/{id} {
+        allow read: if allowReadPost();
+        
+        // update your own posts is ok if not blocked
+        allow update: if allowUpdatePost();
+
+        // always allow members to delete, even when blocked (the right to forgotten)
+        allow delete: if allowDeletePost();
+        
+        // create your own posts is ok if not blocked
+        allow create: if allowUpdatePost();
+      }
+
+      // *************************************** eliud_pkg_album ***************************************
+
+      match /album/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /photocube/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      // *************************************** eliud_pkg_feed ***************************************
+      function allowUpdatePost() {
+        return (
+          // logged in
+          (request.auth != null)
+          // and the member is not blocked
+          && ensureNotBlockedWhilstUpdate()
+          // and posting to his own feed
+          && (request.resource.data.authorId == request.auth.uid)
+
+// I'm removing the readAccess restriction when updating because a) it's not needed b) it interferes with my testing of moving from readAccess determined by the client to google functions
+          // and readAccess not null
+//          && (request.resource.data.readAccess != null)
+          // and posting to himself or to followers and himself
+//          && (
+//            (request.auth.uid in request.resource.data.readAccess)
+//            ||
+//            ('PUBLIC' in request.resource.data.readAccess) // which is only allowed by the owner
+//            )
+        );
+        // TODO: we should also check if all readAccess entries are actual followers.
+        // however, this is not possible with rules
+        // (get(/database/$(database)/documents/app/$(request.resource.data.appId)/following/$(request.auth.uuid+'-'+readAccess[ALL])
+        //
+        // Option 1: One option I considered is the use of subcollection to list each follower. The create rule there is then trivial.
+        // However, the query to retrieve all posts where 'me in readAccess' isn't trivial in that case, and would involve multiple queries, which is expensive.
+        // 
+        // Option 2: Another option is that we limit the query of the retrieval of the posts in the app. In the end, it's not an issue if someone ALLOWS to read his posts, at least if someone else
+        // wouldn't be forced to read these. However, the query to retrieve the posts only specific to the person reading the posts would involve a combination of a where-in and arrayContainsAny query:
+        //      return EliudQuery()
+        //        .withCondition(EliudQueryCondition('authorId', whereIn: followingList))
+        //        .withCondition(EliudQueryCondition('readAccess', arrayContains: me));
+        // However. Firestore doesn't allow this combination of query, i.e. arrayContains + whereIn is not allowed in 1 query together. 
+        // Firestore error "You cannot use 'in' filters with 'array-contains-any' filters"
+        //
+        // Option 3: This is the most trivial solution but also open to a security flaw: When someone posts a post, the readAccess will include all people that are following that person.
+        // The issue with this is that someone can hack the system and post to non-followers, if one would know their firestore ID. In the end that user will be blocked and perhaps at that point
+        // we can implement option 1, or option 2. At that point firestore might have evolved making that implementation easier.
+      }
+      
+      function allowReadPost() {
+        return
+          // owner can read
+          (request.auth != null)
+          && (resource.data.authorId == request.auth.uid)
+          ||
+          // public can read
+          ('PUBLIC' in resource.data.readAccess)
+          ||
+          // logged in
+          (request.auth != null)
+          // readAccess not null
+          && (resource.data.readAccess != null)
+          // where readAccess includes the logged on member
+          && (request.auth.uid in resource.data.readAccess);
+      }
+      
+      function allowDeletePost() {
+        return
+          (
+            // logged in
+            (request.auth != null)
+            // and deleting his own posts
+            && (resource.data.authorId == request.auth.uid)
+          );
+      }
+  
+      match /post/{id} {
+        allow read: if allowReadPost();
+        
+        // update your own posts is ok if not blocked
+        allow update: if allowUpdatePost();
+
+        // always allow members to delete, even when blocked (the right to forgotten)
+        allow delete: if allowDeletePost();
+        
+        // create your own posts is ok if not blocked
+        allow create: if allowUpdatePost();
+      }
+
+      function allowLikeOrCommentPost(id) {
+        return
+          // logged in
+          (request.auth != null)
+          // member must be the logged in person
+          && (request.resource.data.memberId == request.auth.uid)
+          // and member not blocked
+          && (get(/databases/$(database)/documents/app/$(request.resource.data.appId)/access/$(request.auth.uid)).data.blocked != true)
+          // and member hould be in the readAccess list of the post
+          && 
+          (
+            ('PUBLIC' in get(/databases/$(database)/documents/app/$(request.resource.data.appId)/post/$(request.resource.data.postId)).data.readAccess)
+            ||
+            (request.resource.data.memberId in get(/databases/$(database)/documents/app/$(request.resource.data.appId)/post/$(request.resource.data.postId)).data.readAccess)
+          );
+      }
+      
+      function postLikeUpdateCreate(id) {
+        return
+          // only 1 like allowed per member, so key must be 'postId - memberId' or 'postId - memberId - postCommentId',
+          // depending on the type of like
+
+          (
+            (
+              (request.resource.data.postCommentId == null) &&
+		          (id == request.resource.data.postId+'-'+request.resource.data.memberId)
+            )
+            ||
+            (
+              (request.resource.data.postCommentId != null) && 
+		          (id == request.resource.data.postId+'-'+request.resource.data.postCommentId+'-'+request.resource.data.memberId)
+            )
+          )
+          &&
+          // and other like / comment conditions apply
+          allowLikeOrCommentPost(id);
+      }
+
+      match /postlike/{id} {
+        allow read: if true;
+        
+        allow create: if postLikeUpdateCreate(id);
+        allow delete: if 
+                         // logged in
+                        (request.auth != null)
+                         // always allow member to delete stuff. Right to forget
+                        && (resource.data.memberId == request.auth.uid);
+        allow update: if postLikeUpdateCreate(id);
+      }
+
+      match /postcomment/{id} {
+        allow read: if true;
+        allow delete: if 
+                         // logged in
+                        (request.auth != null)
+                         // always allow member to delete stuff. Right to forget
+                        && (resource.data.memberId == request.auth.uid);
+        allow create: if allowLikeOrCommentPost(id);
+        allow update: if allowLikeOrCommentPost(id);
+      }
+
+
+      match /feedfront/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /feed/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+	  
+      match /feedmenu/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+	  
+      match /profile/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+	  
+      match /header/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      // Profile rules are the same as the Post rules
+      match /memberprofile/{id} {
+        allow read: if allowReadPost();
+
+        // update your own posts is ok if not blocked
+        allow update: if allowUpdatePost();
+
+        // always allow members to delete, even when blocked (the right to forgotten)
+        allow delete: if allowDeletePost();
+        
+        // create your own posts is ok if not blocked
+        allow create: if allowUpdatePost();
+      }
+
+      // *************************************** eliud_pkg_shop ***************************************
+      match /cart/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      // TODO: review. Should not allow a blocked member to update, create
+      // Deleting an order can be done by a blocked member given he has the right to be forgotten
+      match /order/{id} {
+        allow read: if (isSuperUser() || ((request.auth != null) && (resource.data.customerId == request.auth.uid)));
+        allow update: if (isSuperUser() || ((request.auth != null) && (resource.data.customerId == request.auth.uid)));
+        allow delete: if (isSuperUser() || ((request.auth != null) && (resource.data.customerId == request.auth.uid)));
+        allow create: if (isSuperUser() || ((request.auth != null) && (request.resource.data.customerId == request.auth.uid)));
+      }
+
+      match /orderoverview/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /pay/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /payconfirmation/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /product/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /productdisplay/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /shop/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /shopfront/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /membercart/{id} {
+        allow read: if (
+          // only allow logged in members to read
+          (request.auth != null)
+          // and only allow member to read his own cart
+          && (id == request.auth.uid)
+         );
+
+        allow update: if (
+          // only allow logged in members to read
+          (request.auth != null)
+          // and only allow member to update his own cart
+          && (id == request.auth.uid)
+          // and member not blocked
+          && ensureNotBlockedWhilstUpdate()
+         );
+
+        allow delete: if (
+          // only allow logged in members to read
+          (request.auth != null)
+          // and only allow member to delete his own cart
+          && (id == request.auth.uid)
+          // and the follower is not blocked
+         );
+
+        allow create: if (
+          // only allow logged in members to read
+          (request.auth != null)
+          // and only allow member to create his own cart
+          && (id == request.auth.uid)
+          // and the follower is not blocked
+          && ensureNotBlockedWhilstUpdate()
+         );
+
+	  }
+
+      // *************************************** eliud_pkg_notifications ***************************************
+      
+      match /notification/{id} {
+        // Everybody can read notifications he created or was assigned to
+        allow read: if canReadNotificationsAndAssignmentsAndStuff();
+        // Everybody can update, delete notifications he created
+        allow update: if canUpdateNotificationsAndAssignmentsAndStuff();
+        allow delete: if canDeleteNotificationsAndAssignmentsAndStuff();
+        // Someone can create notification in his name
+        allow create: if canCreateNotificationsAndAssignmentsAndStuff();
+      }
+
+      match /notificationdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      // *************************************** eliud_pkg_workflow ***************************************
+      
+      match /workflow/{id} {
+        allow read: if readAppData();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /assignmentview/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      match /assignment/{id} {
+        // Everybody can read assignments he created or was assigned to
+        allow read: if canReadNotificationsAndAssignmentsAndStuff();
+        // Everybody can update, delete assignments he created
+        allow update: if canUpdateNotificationsAndAssignmentsAndStuff();
+        allow delete: if canDeleteNotificationsAndAssignmentsAndStuff();
+        // Someone can create assignments in his name
+        allow create: if canCreateNotificationsAndAssignmentsAndStuff();
+      }
+
+      // *************************************** eliud_pkg_membership ***************************************
+      
+      match /membershipdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      // *************************************** eliud_pkg_text *********************************************
+      
+      match /htmlwithplatformmedium/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      // *************************************** eliud_pkg_chat *********************************************
+      
+      function isOwnMemberHasChat(id) {
+        return
+          // logged in
+          (request.auth != null)
+          // and accessing to his memberhaschat
+          && (id == request.auth.uid)
+      }
+      
+      match /memberhaschat/{id} {
+        allow read: if isOwnMemberHasChat(id);
+        allow update: if isOwnMemberHasChat(id); 
+        allow delete: if isOwnMemberHasChat(id);
+        allow create: if isOwnMemberHasChat(id);
+      }
+      
+      match /chatdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      function canUpdateRoom() {
+        return
+          (request.auth != null) && 
+          ensureNotBlockedWhilstUpdate() &&
+          (request.resource.data.ownerId == request.auth.uid) &&
+          (request.auth.uid in request.resource.data.members);
+      }
+
+      function canReadRoom() {
+        return
+          (request.auth != null) &&
+          (request.auth.uid in resource.data.members);
+      }
+    
+      match /room/{roomid} {
+        allow read: if true;//canReadRoom();
+        allow update: if canUpdateRoom(); 
+        allow delete: if canUpdateRoom();
+        allow create: if canUpdateRoom();
+ 
+        // ensure member has access to room
+        function writeAccessToChat() {
+          return 
+            (request.auth != null) 
+            && ensureNotBlockedWhilstUpdate() 
+            && (request.auth.uid == request.resource.data.authorId) 
+            && (request.auth.uid in get(/databases/$(database)/documents/app/$(request.resource.data.appId)/room/$(request.resource.data.roomId)).data.members)
+            ;
+        }
+        
+        function readAccessToChat() {
+        	return (request.auth != null)
+                       && (resource.data.readAccess != null)
+                       && (request.auth.uid in resource.data.readAccess);
+        }
+          
+        match /chat/{chatid} {
+          allow read: if readAccessToChat();
+          allow update: if writeAccessToChat(); 
+          allow delete: if writeAccessToChat();
+          allow create: if writeAccessToChat();
+        }
+
+        match /chatmemberinfo/{id} {
+          allow read: if readAccessToChat();//(request.auth != null);	// should be readAccessToChat, butdoesn't work
+          allow update: if writeAccessToChat(); 
+          allow delete: if writeAccessToChat();
+          allow create: if writeAccessToChat();
+        }
+      }
+      
+      // *************************************** eliud_pkg_follow ***************************************
+      
+      match /invitedashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /followrequestsdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      match /followingdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
+      // A member can request to follow someone else. That someone else must then be able to approve it.
+      // Both members must be able to terminate that relationship.
+      // 
+      // We must prevent a member to follow another member without his permission
+      // We must prevent a member to make other to follow him
+      // 
+      // For this, we have 2 collections: followrequest and following. 
+      // 
+      // First the process: The followrequest allows a member (followerId) to create the request. 
+      // This request will be marked as status Pending (0). The follower can update this request by changing the status to Accepted (1) or 
+      // Declined (2). During that process the follower also creates an entry in following collection.
+      // 
+      // To prevent a member to follow another member without his permission, the 'following' table can only
+      // be created by the person being followed. 
+      // 
+      // To prevent a member to make another to follow him, the 'following' entry can only be created 
+      // if a corresponding request exists.
+      // 
+      // To check if a corresponding request exists, we make use the convention of the followingrequest 
+      // documentId to be the followedId + '-' + followerId. With this convention secured in place 
+      // finding the corresponding request is trivial. 
+      // 
+      // Both members can delete the followrequest.
+      match /followrequest/{id} {
+        // This could be more specific, limitted to only follower or followed to read. 
+        // For now we allow everybody to read, as there's not really secret information, just the internal keys
+        allow read: if true;
+        
+        allow update: if 
+        (
+        // convention document id is the followedId+'-'+followerId
+          (id == request.resource.data.followedId+'-'+request.resource.data.followerId)
+          // logged in
+          && (request.auth != null)
+          // and both followed and follower are allowed
+          && 
+            (
+              // followed is updating
+              (request.resource.data.followedId == request.auth.uid)
+              ||
+              // or follower is updatoing
+              (request.resource.data.followerId == request.auth.uid)
+            )
+        );
+        
+        allow delete: if 
+        (
+          // logged in
+          (request.auth != null)
+          // and both followed and follower are allowed
+          && 
+            (
+              // followed is deleting
+              (request.resource.data.followedId == request.auth.uid)
+              ||
+              // or follower is deleting
+              (request.resource.data.followerId == request.auth.uid)
+            )
+        );
+        
+        allow create: if
+        (
+          // convention document id is the followedId+'-'+followerId
+          (id == request.resource.data.followedId+'-'+request.resource.data.followerId)
+          // and logged in
+          && (request.auth != null)
+          // and only the follower can create a request
+          && (request.resource.data.followerId == request.auth.uid)
+          // and the follower is not blocked
+          && (get(/databases/$(database)/documents/app/$(request.resource.data.appId)/access/$(request.auth.uid)).data.blocked != true)
+        );
+      }
+      
+      match /following/{id} {
+        // This could be more specific, limitted to only follower or followed to read. 
+        // For now we allow everybody to read, as there's not really secret information, just the internal keys
+        allow read: if true;
+        
+        allow delete: if 
+        (
+          // logged in
+          (request.auth != null)
+          // and both followed and follower are allowed
+          && 
+            (
+              // followed is deleting
+              (resource.data.followedId == request.auth.uid)
+              ||
+              // or follower is deleting
+              (resource.data.followerId == request.auth.uid)
+            )
+        );
+        allow update: if false; // there's no need to allow updates
+        allow create: if 
+        (
+          // convention document id is the followedId+'-'+followerId
+          (id == request.resource.data.followedId+'-'+request.resource.data.followerId) 
+          // logged in
+          && (request.auth != null)
+          // and only the followed can create a following
+          && (request.resource.data.followedId == request.auth.uid)
+          // but only if a corresponding request exists in followrequest (to prevent people to be followed by anyone they like)
+          && (get(/databases/$(database)/documents/app/$(request.resource.data.appId)/followrequest/$(request.resource.data.followedId+'-'+request.resource.data.followerId)) != null)
+          
+        );
+
+      }
+
+      // *************************************** eliud_stl_mona ***************************************
+      match /monastyleattributes/{id} {
+        allow read: if true;
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+      
+      // *************************************** app itself ***************************************
+
+      allow read: if true
+      allow update: if isSuperUser() || ((request.auth != null) && (resource.data.ownerID == request.auth.uid));
+      allow delete: if isSuperUser() || ((request.auth != null) && (resource.data.ownerID == request.auth.uid));
+      allow create: if isSuperUser() || ((request.auth != null) && (request.resource.data.ownerID == request.auth.uid));
+    }
+
+    // *************************************** top level ***************************************
+
+    match /publicmedium/{id} {
+      allow read: if true
+      allow update: if isSuperUser() || ((request.auth != null) && (resource.data.authorId == request.auth.uid));
+      allow delete: if isSuperUser() || ((request.auth != null) && (resource.data.authorId == request.auth.uid));
+      allow create: if isSuperUser() || ((request.auth != null) && (request.resource.data.authorId == request.auth.uid));
+    }
+
+    // eliud_core - Nobody except superuser and member can see member data
+    match /member/{id} {
+      allow read: if ((request.auth != null) && (id == request.auth.uid));
+      allow write: if isSuperUser() || ((request.auth != null) && (id == request.auth.uid));
+    }
+
+    // eliud_core - Nobody except superuser and member can see memberclaim data
+    // memberclaim is used within a mechanism to inform the app that user claims require to be refreshed:
+    // app subscribeds to the document 
+    // google function will update the memberclaim when the user claim has been updated
+    // at this point, the app refreshes the claim usr.reload() / usr.getIdTokenResult(true) (one of these 2 or both)
+    match /memberclaim/{id} {
+      allow read: if ((request.auth != null) && (id == request.auth.uid));
+      allow write: if isSuperUser() || ((request.auth != null) && (id == request.auth.uid));
+    }
+
+    // eliud_pkg_membership - Because member is private, we have a copy of member data that can be publicly accessed. This copy is created with firestore functions
+    match /memberpublicinfo/{id} {
+      allow read: if true;
+      allow write: if false; // only updated by functions
+    }
+  }
+}
