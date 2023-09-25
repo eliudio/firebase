@@ -1,6 +1,7 @@
 # firebase
 
 Files important here: 
+- firebase.json
 - firestore.rules
 - storage.rules
 - functions/index.js
