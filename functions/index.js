@@ -21,8 +21,10 @@ const bucket = functions.config().app.bucket;
 const storage = new Storage();
 const myBucket = storage.bucket(bucket);
 
-const sgMail = require('@sendgrid/mail');
-sgMail.setApiKey(functions.config().sendgrid.apikey);
+const { MailtrapClient } = require("mailtrap");
+
+//const sgMail = require('@sendgrid/mail');
+//sgMail.setApiKey(functions.config().sendgrid.apikey);
 
 // member
 
@@ -375,7 +377,13 @@ exports.memberMediumSyncDelete = functions.firestore.document('/app/{appid}/memb
 });
 
 // mail 
-const sgmailEmail = functions.config().sendgrid.email;
+//const sgmailEmail = functions.config().sendgrid.email;
+
+const TOKEN = functions.config().mailtrap.token;
+const ENDPOINT = "https://send.api.mailtrap.io/";
+
+const client = new MailtrapClient({ endpoint: ENDPOINT, token: TOKEN });
+
 const appName = functions.config().app.appname;
 const collectionName = functions.config().app.collectionname;
 
@@ -384,15 +392,28 @@ const collectionName = functions.config().app.collectionname;
 async function sendEmail(email, theSubject, theText) {
   console.log("sendEmail");
 
-  // send mail
-  const msg = {
-    to: email,
-    from: sgmailEmail,
-    subject: theSubject,
-    html: theText
+  const sender = {
+    email: functions.config().mailtrap.sender.email, // "mailtrap@thoma5.com"
+    name: functions.config().mailtrap.sender.name    // "Mailtrap Test",
   };
-  
-  sgMail
+  const recipients = [
+    {
+      email: email,
+    }
+  ];
+
+  client
+    .send({
+      from: sender,
+      to: recipients,
+      subject: theSubject,
+      text: theText,
+      category: theSubject,
+    })
+    .then(console.log, console.error);
+
+
+/*  sgMail
   .send(msg)
   .then((response) => {
     console.log("Email sent to " + email + " " + " with subject " + theSubject);
@@ -401,8 +422,8 @@ async function sendEmail(email, theSubject, theText) {
     console.log("Error sending mail...");
     console.error(error);
   });
+  */
 }
-
 
 // Sends a welcome email to new user.
 exports.sendWelcomeEmail = functions.auth.user().onCreate((user) => {
