@@ -1,16 +1,6 @@
 {
   "indexes": [
     {
-      "collectionGroup": "blocking",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "memberBlocking",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "assignment",
       "queryScope": "COLLECTION",
       "fields": [

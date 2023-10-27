@@ -387,7 +387,6 @@ const client = new MailtrapClient({ endpoint: ENDPOINT, token: TOKEN });
 const appName = functions.config().app.appname;
 const collectionName = functions.config().app.collectionname;
 
-
 // Sends a welcome email to the given user.
 async function sendEmail(email, theSubject, theText) {
   console.log("sendEmail");
@@ -413,16 +412,15 @@ async function sendEmail(email, theSubject, theText) {
     .then(console.log, console.error);
 
 
-/*  sgMail
-  .send(msg)
-  .then((response) => {
-    console.log("Email sent to " + email + " " + " with subject " + theSubject);
-  })
-  .catch((error) => {
-    console.log("Error sending mail...");
-    console.error(error);
-  });
-  */
+//  sgMail
+//  .send(msg)
+//  .then((response) => {
+//    console.log("Email sent to " + email + " " + " with subject " + theSubject);
+//  })
+//  .catch((error) => {
+//    console.log("Error sending mail...");
+//    console.error(error);
+//  });
 }
 
 // Sends a welcome email to new user.
@@ -1216,6 +1214,7 @@ async function updateReadAccessChat(chat, roomId, documentId) {
   }
 }
 
+
 // 4) chatMemberInfo
 async function updateReadAccessChatMemberInfo(chatMemberInfo, roomId, documentId) {
   if (chatMemberInfo != null) {
@@ -1505,3 +1504,6 @@ exports.createPaymentIntent = functions.https.onCall((data, context) => {
       payment_method_types: ['card']
     });
 })
+
+/*
+*/
