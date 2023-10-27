@@ -464,6 +464,13 @@ service cloud.firestore {
         allow create: if createAppData();
       }
 
+      match /blockingdashboard/{id} {
+        allow read: if privilegedReadAccess();
+        allow update: if updateAppData(); 
+        allow delete: if deleteAppData();
+        allow create: if createAppData();
+      }
+
       // **** eliud_pkg_fundamentals ****
       match /booklet/{id} {
         allow read: if privilegedReadAccess();
@@ -1201,5 +1208,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false; // only updated by functions
     }
-  }
+
+    match /blocking/{id} {
+      allow read: if ((request.auth != null) && (resource.data.memberBlocking == request.auth.uid));
+      allow write: if ((request.auth != null) && (request.resource.data.memberBlocking == request.auth.uid));
+      allow delete: if ((request.auth != null) && (resource.data.memberBlocking == request.auth.uid));
+    }
+
+}
 }
