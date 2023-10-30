@@ -23,9 +23,6 @@ const myBucket = storage.bucket(bucket);
 
 const { MailtrapClient } = require("mailtrap");
 
-//const sgMail = require('@sendgrid/mail');
-//sgMail.setApiKey(functions.config().sendgrid.apikey);
-
 // member
 
 async function updateMemberAndPublicInfo(data, context) {
@@ -62,8 +59,50 @@ async function updateMemberAndPublicInfo(data, context) {
 exports.memberSyncUpdate = functions.firestore.document('member/{documentId}').onUpdate(async (snap, context) => {
   functions.logger.log('member onUpdate');
   const afterSnapshot = snap.after;
+
   if (afterSnapshot != null) {
     const afterVal = afterSnapshot.data();
+    try {
+      functions.logger.log('send welcome mail');
+      // send welcome mail
+      const email = afterVal.email; // The email of the user.
+      const displayName = afterVal.name; // The  name of the user.
+      functions.logger.log('email = ' + email);
+      functions.logger.log('displayName = ' + displayName);
+
+      // find which app
+      const beforeSnapshot = snap.before;
+      const beforeVal = beforeSnapshot.data();
+
+      if (!((afterVal.subscriptions === undefined) || (afterVal.subscriptions == null) || (afterVal.subscriptions.length === 0))) {
+        if (beforeVal.subscriptions.length != afterVal.subscriptions.length) {
+//          if (beforeVal.subscriptions.length+1 === afterVal.subscriptions.length) {
+          const subscriptionsAsStringBefore = beforeVal.subscriptions.map(value => value.appId);
+          const subscriptionsAsStringAfter = afterVal.subscriptions.map(value => value.appId);
+
+          for (var subscriptionAfter of subscriptionsAsStringAfter) {
+            var found = false;
+            for (var subscriptionBefore of subscriptionsAsStringBefore) {
+              if (subscriptionBefore === subscriptionAfter) {
+                found = true;
+              }
+            }
+
+            if (!found) {
+              functions.logger.log('sendWelcomeEmail ' + subscriptionAfter);
+              functions.logger.log('email ' + email);
+              functions.logger.log('displayName ' + displayName);
+              
+              sendWelcomeEmail(subscriptionAfter, email, displayName);
+            }
+          }
+//          }
+        }
+      }
+    } catch(error) {
+        functions.logger.log('error whilst trying to send welcome mail ' + error);
+    }
+
     return updateMemberAndPublicInfo(afterVal, context);
   } else {
     functions.logger.log('afterSnapshot was null');
@@ -81,9 +120,34 @@ exports.memberSyncDelete = functions.firestore.document('member/{documentId}').o
   }
 });
 
+async function sendWelcomeEmail(appId, email, name) {
+  console.log("sendWelcomeEmail");
+
+  if (appId != null) {
+    var appRef = admin.firestore().collection('app').doc(appId);
+    if (appRef != null) {
+      const appDoc = await appRef.get();
+      if (appDoc.exists) {
+        var appData = appDoc.data();
+        if (appData.welcomeMessage != null) {
+          // retrieve welcome HTML from app, then send it
+          functions.logger.log('sending the email.');
+          const sendThis = appData.welcomeMessage.replaceAll("${NAME}", name);
+          await sendEmail(email, 'Welcome ' + name, sendThis);
+        } else {
+          functions.logger.log('no welcomeMesssage');
+        }
+      }
+    }
+  }
+}
+
 exports.memberSyncCreate = functions.firestore.document('member/{documentId}').onCreate(async (snap, context) => {
-  functions.logger.log('member onCreate');
-  return updateMemberAndPublicInfo(snap.data(), context);
+  functions.logger.log('member onCreate!');
+  
+  const snapshot = snap.data();
+  
+  return updateMemberAndPublicInfo(snapshot, context);
 });
 
 // *************************************************************************************************************
@@ -99,7 +163,6 @@ function arrayRemove(arr, value) {
     });
   }
 }
-
 
 function updateToken(afterVal, memberId, context) {
   if (afterVal != null) {
@@ -248,7 +311,6 @@ exports.accessSyncCreate = functions.firestore.document('app/{appId}/access/{doc
 // readAccess 
 // Update readAccess (list of members) based on the fields "accessibleByGroup" and "accessibleByMembers"  
 // in 1) memberMedium, 2) post, 3) chat, 4) chatMemberInfo, 5) memberProfile  
-
 async function findFollowers(appId, followedId) {
   var appRef = admin.firestore().collection('app').doc(appId);
   if (appRef != null) {
@@ -406,7 +468,7 @@ async function sendEmail(email, theSubject, theText) {
       from: sender,
       to: recipients,
       subject: theSubject,
-      text: theText,
+      html: theText,
       category: theSubject,
     })
     .then(console.log, console.error);
@@ -423,17 +485,16 @@ async function sendEmail(email, theSubject, theText) {
 //  });
 }
 
-// Sends a welcome email to new user.
-exports.sendWelcomeEmail = functions.auth.user().onCreate((user) => {
-  console.log("sendWelcomeEmail");
-  const email = user.email; // The email of the user.
-  const displayName = user.displayName; // The display name of the user.
+// Sends a welcome email to new user. -> sending email when creating member document, instead of creating user
+//exports.sendWelcomeEmail = functions.auth.user().onCreate((user) => {
+//  console.log("sendWelcomeEmail");
+//  const email = user.email; // The email of the user.
+//  const displayName = user.displayName; // The display name of the user.
   
-  return sendEmail(email, 'Welcome ' + displayName, 'Hello ' + displayName + '. Welcome new joiner');
-});
+//  return sendEmail(email, 'Welcome ' + displayName, 'Hello ' + displayName + '. Welcome new joiner');
+//});
 
 // dumpMemberData
-
 async function retrieveCollectionData(appRef, collection, uid, myProcessData) {
   if (collection != null) {
     if ((collection.name != null) && (collection.memberIdentifier != null)) {
@@ -505,7 +566,7 @@ exports.backendrequestCreate = functions.firestore.document('app/{appId}/backend
     if (data.requestType == 0) {
       class GenerateHtml {
         constructor() {
-          this.htmlValue = '<p>Hi</p><p><p>Below is the data that we keep. When opening URLs, make sure to login to the (google?) account to have access to the links / images.</p>';
+          this.htmlValue = '<p>Hi</p><p><p>Below is the data that we keep. When opening URLs, make sure to login to the (google or apple) account to have access to the links / images.</p>';
         }
         
         async startCollection(name) {
@@ -1506,4 +1567,5 @@ exports.createPaymentIntent = functions.https.onCall((data, context) => {
 })
 
 /*
+
 */
